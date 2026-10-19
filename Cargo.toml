@@ -1,0 +1,28 @@
+[package]
+name = "typerust"
+description = "Typerust: manga and comic lettering for PhotoCraft (WebAssembly panel plug-in, ABI v2)"
+version = "0.1.0"
+edition = "2024"
+# MIT alone, not MIT OR Apache-2.0: everything this port carries from TypeR 2.5.0 and TyperTools 1.4.9
+# is MIT (see ATTRIBUTION.md and NOTICE), so one set of terms covers the whole crate.
+license = "MIT"
+publish = false
+
+# Not a member of any workspace, and deliberately so: the crate builds for wasm32-unknown-unknown
+# only, and nothing in it may reach a host crate. It began life as a port inside the TyperTools
+# repository and is now its own project; the id it installs under is the only thing the host knows it
+# by.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
