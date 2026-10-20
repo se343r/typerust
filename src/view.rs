@@ -570,23 +570,33 @@ fn actions(p: &Panel) -> Vec<Value> {
 fn script_pane(p: &Panel) -> Vec<Value> {
     let hidden = p.hide_done && !p.done.is_empty();
     let hint = if hidden { format!("{} finished row(s) hidden", p.done.len()) } else { "one line of dialogue per row".to_string() };
-    let mut out = vec![row(vec![label("Script"), muted(hint)])];
+    // The box is the importer: it is what a chapter is pasted into, and once a script is in, the pane
+    // is the script itself and the box is in the way of it. The button beside the pane's title says
+    // which way it goes — "Edit script" brings it back for a change to a line, "Done" puts it away.
+    let box_button = if p.script_box { button("scriptBoxClose", "Done", false, true) } else { button("scriptBoxOpen", "Edit script", false, true) };
+    let mut out = vec![row(vec![label("Script"), muted(hint), box_button])];
     if p.has("list") {
         out.push(script_list(p));
         if p.lines.len() > LIST_MAX {
             out.push(warning(format!(
-                "The list shows the first {LIST_MAX} lines; the script box below still holds all {}.",
+                "The list shows the first {LIST_MAX} lines; the script itself holds all {}.",
                 p.lines.len()
             )));
         }
     }
-    out.push(text(
-        "script",
-        &clip(&p.visible_script()),
-        "One line of dialogue per row. Start a line with a style's prefix to set it in that style.",
-        true,
-        SCRIPT_MAX,
-    ));
+    if p.script_box {
+        out.push(text(
+            "script",
+            &clip(&p.visible_script()),
+            "One line of dialogue per row. Start a line with a style's prefix to set it in that style.",
+            true,
+            SCRIPT_MAX,
+        ));
+    } else if p.lines.is_empty() {
+        out.push(muted("No script yet: Edit script opens the box to paste one in."));
+    } else {
+        out.push(muted(format!("{} line(s) read: Edit script opens the box to change one.", p.lines.len())));
+    }
     out
 }
 
@@ -1060,6 +1070,21 @@ fn settings(p: &Panel) -> Vec<Value> {
         row(vec![muted("Style size step"), number("set_styleStep", p.style_step, 0.01, 1000.0, 0.01, false)]),
         toggle("set_quickStyleSize", p.quick_size, "Show the quick style size editor on library rows"),
         separator(),
+        label("Shortcuts"),
+        muted("The panel's own presses are its buttons: a panel cannot be given keys. ABI v2 has no command or shortcut contribution, and nothing typed reaches a panel's sandbox, so a key set here would be a promise the host cannot keep."),
+        muted("TypeR had no shortcut settings either — its buttons were the whole interface."),
+        muted("These are PhotoCraft's own keys, written the way this platform writes them. They work while this window is up: the panel is a window inside PhotoCraft rather than a separate application."),
+        row(vec![label(keys(p, "Cmd+Shift+,")), muted("Decrease Type Size — the selected type layer a step down")]),
+        row(vec![label(keys(p, "Cmd+Shift+.")), muted("Increase Type Size")]),
+        row(vec![label(keys(p, "Cmd+Alt+Shift+,")), muted("Decrease Type Size by 10")]),
+        row(vec![label(keys(p, "Cmd+Alt+Shift+.")), muted("Increase Type Size by 10")]),
+        muted(format!(
+            "The host's own step is 2 pt. A−/A+ step by the Size step above — {} pt — and keep the layer where it is, as TypeR did.",
+            round(p.size_increment)
+        )),
+        muted("Two more worth a key, and neither has one to begin with: Layer ▸ New ▸ New Type Layer, which is what Create does, and this panel's own row under Window ▸ Plug-ins ▸ Typerust, which shows and hides the window."),
+        muted("All of them are listed in Edit ▸ Keyboard Shortcuts, which is where a key is given, changed or removed."),
+        separator(),
         row(vec![muted("State name"), text("state_name", &p.state_name, "Scene 3", false, LABEL_MAX), button("state_save", "Save state", false, true)]),
         muted("A state is the script, the line and the style in use — TypeR's saved states. Page images and the last opened PSD are not part of it: a panel can neither open nor see a file."),
     ];
@@ -1102,9 +1127,8 @@ fn help(p: &Panel) -> Vec<Value> {
         muted("Under them: nested folders with a folder-scoped prefix priority, `//` inheritance, ignore tags, markdown bold and italic, RTL direction, internal padding and resize-on-centre."),
         muted("Both size steps, the quick style size, saved states, the style editor, and TypeR's full and single-folder JSON exports."),
         label("What is not, and why"),
-        muted(
-            "Keyboard shortcuts: a panel cannot add any — ABI v2 has no command or shortcut contribution, so the three actions are these buttons. Nothing is lost, but they need the panel to have focus.",
-        ),
+        muted("Keyboard shortcuts: a panel cannot add any — ABI v2 has no command or shortcut contribution, and keystrokes never cross the sandbox — so the actions are these buttons."),
+        muted("The host's own keys, spelled for this platform and with the two host rows worth giving a key to, are on the Settings page."),
     ];
     // The gaps are the host's, and a host that has grown the widget is no longer missing it. Say
     // which, rather than either claiming a gap that is gone or pretending the plain layout is it.
@@ -1155,6 +1179,24 @@ fn clip(text: &str) -> String {
         return text.to_string();
     }
     text.chars().take(SCRIPT_MAX).collect()
+}
+
+/// A host shortcut in the platform's own notation, as the host writes it in its menus: `Cmd+Shift+.`
+/// is `⌘⇧.` on macOS and `Ctrl+Shift+.` elsewhere. The panel is told the platform at `init`; a host
+/// that says nothing gets the non-Mac spelling rather than a guess at a Mac one.
+fn keys(p: &Panel, spec: &str) -> String {
+    let mac = p.platform == "macos";
+    spec.split('+')
+        .map(|part| match (part, mac) {
+            ("Cmd", true) => "⌘",
+            ("Cmd", false) => "Ctrl+",
+            ("Shift", true) => "⇧",
+            ("Shift", false) => "Shift+",
+            ("Alt", true) => "⌥",
+            ("Alt", false) => "Alt+",
+            (other, _) => other,
+        })
+        .collect()
 }
 
 fn round(v: f64) -> String {
@@ -1658,6 +1700,8 @@ mod tests {
                     | "ed_colorHex"
                     | "ed_antiAlias"
                     | "scriptLine"
+                    | "scriptBoxOpen"
+                    | "scriptBoxClose"
                     // The panes' ids name the host's scroll state, not a control: nothing is sent
                     // when one is scrolled.
                     | "scriptPane"
@@ -1913,6 +1957,58 @@ mod tests {
             cut_labels(&view, &mut cut_short);
             assert!(cut_short.is_empty(), "{page:?} cuts its own text: {cut_short:?}");
         }
+    }
+
+    #[test]
+    fn the_script_pane_carries_the_button_that_puts_the_box_away_and_brings_it_back() {
+        // The box is the importer: with a script in, the pane is the script itself and the box is in
+        // the way of it, so the header carries the press that brings it back.
+        let mut p = Panel::new();
+        p.widgets = all_widgets();
+        p.script = "d. one\nd. two".into();
+        p.reparse();
+        let open = render(&p);
+        assert!(widget_with_id(&open, "script").is_some(), "the box is drawn while it is open");
+        assert!(widget_with_id(&open, "scriptBoxClose").is_some());
+        p.script_box = false;
+        let view = render(&p);
+        check(&view);
+        assert!(widget_with_id(&view, "script").is_none(), "and not once it is put away");
+        assert!(widget_with_id(&view, "scriptBoxOpen").is_some(), "the press that brings it back");
+        assert!(widget_with_id(&view, "scriptLine").is_some(), "the lines are still there to work through");
+        let dumped = view.to_string();
+        assert!(dumped.contains("Edit script"), "{dumped}");
+        assert!(dumped.contains("2 line(s) read"), "and says where the script went: {dumped}");
+        // An empty panel says what to do instead of naming a count of nothing.
+        let mut fresh = Panel::new();
+        fresh.widgets = all_widgets();
+        fresh.script_box = false;
+        assert!(render(&fresh).to_string().contains("No script yet"));
+    }
+
+    #[test]
+    fn the_shortcuts_page_names_the_host_keys_in_this_platforms_notation() {
+        // The panel owns no keys — Help says why — so the Settings page names the host's own, says
+        // where they are changed, and spells them the way the platform the host reported at `init`
+        // spells them: ⌘⇧. against Ctrl+Shift+. A Linux letterer sent looking for "Cmd" is being sent
+        // after a key their keyboard does not have.
+        let mut p = Panel::new();
+        p.page = Page::Settings;
+        p.platform = "macos".into();
+        let mac = render(&p);
+        check(&mac);
+        let mac = mac.to_string();
+        assert!(mac.contains("⌘⇧.") && mac.contains("⌘⇧,"), "the size steps: {mac}");
+        assert!(mac.contains("⌘⌥⇧"), "and the by-10 steps carry Alt: {mac}");
+        p.platform = "linux".into();
+        let linux = render(&p).to_string();
+        assert!(linux.contains("Ctrl+Shift+.") && linux.contains("Ctrl+Alt+Shift+,"), "{linux}");
+        assert!(!linux.contains('⌘') && !linux.contains('⇧'), "and no Mac glyphs off a Mac: {linux}");
+        assert!(linux.contains("Edit ▸ Keyboard Shortcuts"), "where a key is changed: {linux}");
+        assert!(linux.contains("New Type Layer"), "and the host rows worth a key: {linux}");
+        // A host that reports nothing gets the non-Mac spelling rather than a guess at a Mac one.
+        p.platform = String::new();
+        assert!(render(&p).to_string().contains("Ctrl+Shift+."));
     }
 
     #[test]

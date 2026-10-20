@@ -23,7 +23,7 @@ listed below.
 
 | Where the work stands | |
 |---|---|
-| Working now | TypeR's three-pane layout and footer; script parsing with `//` inheritance and ignore tags; nested folders with folder-scoped prefix priority; Create / Insert / Align; `internalPadding` and `resizeTextBoxOnCenter`; the configurable layer size increment and style-size step; quick style size; markdown bold/italic runs; RTL direction; saved states; the style editor; import/export in TypeR's own and single-folder shapes as text |
+| Working now | TypeR's three-pane layout and footer; script parsing with `//` inheritance and ignore tags; nested folders with folder-scoped prefix priority; Create / Insert / Align; `internalPadding` and `resizeTextBoxOnCenter`; the configurable layer size increment and style-size step; quick style size; markdown bold/italic runs; RTL direction; saved states; the style editor; import/export in TypeR's own and single-folder shapes as text; the script box closing itself once a script is in, and the Shortcuts guide on the Settings page |
 | Next, reused rather than rewritten | TypeR's own locale files — nine languages, MIT — carried over as data instead of being re-translated (the panel is English only until that lands) |
 | Next, needs a host allow-list row | Auto-centring without a selection (TypeR's bubble detection, on `select.magicWand`), multi-bubble mode, and the **stroke** a style carries (`layer.layerStyle.stroke`) |
 | Next, needs new host surface | Pages (a file picker and document open/close/switch, which a panel is refused today), rebindable shortcuts (a panel contributes no commands), storage on disk for the library and states |
@@ -54,6 +54,18 @@ no modal, so they replace the panes and carry a Back button.
 A letterer pastes a script — one line of dialogue per row — tags a line with a style's prefix, and
 sets it into the page in that style. The panel keeps a library of styles organised in folders, exports
 and imports it in TypeR's JSON format, and drives the document through PhotoCraft's own type engine.
+
+The box the script is pasted into is the importer, and it is only needed for importing: leaving it
+commits the script, the pane becomes the script itself, and the box — which is otherwise in the way of
+the line list — is put away. **Edit script**, beside the pane's title, brings it back to change a
+line, and a line corrected while it is open leaves it open. A script the panel has not been working on
+starts at its first line; an edit to the one it has keeps the letterer's place.
+
+The Settings page has a **Shortcuts** guide. It names the host's own keys that work while the panel is
+up, spelled for the platform the host reports (⌘⇧. against Ctrl+Shift+.), with the two host rows worth
+giving a key to and the menu where any of them is changed. The panel itself can own no keys — ABI v2
+has no command or shortcut contribution and no keystroke crosses the sandbox — so its own presses are
+its buttons, and the guide says so rather than promising a key that cannot fire.
 
 Everything the panel changes in the document goes through five engine commands — `type.create`,
 `type.edit`, `type.setStyle`, `type.info`, `type.fonts` — which are exactly the five the host's

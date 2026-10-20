@@ -193,6 +193,10 @@ pub struct Panel {
     pub state_name: String,
     pub page: Page,
     pub script: String,
+    /// Whether the script box is drawn. It is the panel's importer — the field a chapter is pasted
+    /// into — and once a script is in, the pane is the line list and the box is in the way; the
+    /// button beside the pane's title (`scriptBoxOpen`) brings it back for an edit.
+    pub script_box: bool,
     pub lines: Vec<Line>,
     /// Which line the buttons work on: an index into `lines`, which is the raw script row.
     pub cursor: usize,
@@ -232,6 +236,11 @@ pub struct Panel {
     /// `label.color`, `label.font`, `button.icon`). Empty on a host that sends none, which is how
     /// one module serves both: the view asks [`Panel::has`] and sends the plain layout otherwise.
     pub widgets: Vec<String>,
+    /// The platform the host runs on, from `init.host.platform` (`macos`, `windows`, `linux`). The
+    /// Settings page writes the host's own keys in that platform's notation — `⌘⇧.` against
+    /// `Ctrl+Shift+.` — and nothing else depends on it. Empty means the host said nothing, which reads
+    /// as the non-Mac spelling rather than as a wrong one.
+    pub platform: String,
 }
 
 impl Default for Panel {
@@ -256,6 +265,9 @@ impl Panel {
             state_name: String::new(),
             page: Page::Lettering,
             script: String::new(),
+            // Open to begin with: an empty panel is a panel waiting for a script, and the box is
+            // where one goes.
+            script_box: true,
             lines: Vec::new(),
             cursor: 0,
             done: BTreeSet::new(),
@@ -274,6 +286,7 @@ impl Panel {
             runs: 0,
             starter_pending: false,
             widgets: Vec::new(),
+            platform: String::new(),
         }
     }
 
@@ -416,6 +429,7 @@ impl Panel {
 
     fn init(&mut self, event: &Value) -> Vec<Value> {
         let storage = event.get("storage").and_then(Value::as_object);
+        let mut stored_script_box: Option<bool> = None;
         if let Some(s) = storage.and_then(|s| s.get(STORAGE_LIBRARY)).and_then(Value::as_str)
             && let Ok(v) = serde_json::from_str::<Value>(s)
         {
@@ -436,10 +450,15 @@ impl Panel {
             self.size_increment = integer(number(&v, "textSizeIncrement", 1.0), 1.0, 99.0, 1.0);
             self.style_step = positive(number(&v, "styleSizeStep", 0.1), 0.1);
             self.quick_size = v.get("showQuickStyleSize").and_then(Value::as_bool).unwrap_or(true);
+            // Read here and applied below, once the stored script is known: a panel that stored a
+            // script but no setting is a panel from before the box could be put away, and it opens the
+            // way it would have if that script had just been imported.
+            stored_script_box = v.get("scriptBoxOpen").and_then(Value::as_bool);
         }
         if let Some(s) = storage.and_then(|s| s.get(STORAGE_SCRIPT)).and_then(Value::as_str) {
             self.script = s.to_string();
         }
+        self.script_box = stored_script_box.unwrap_or_else(|| self.script.trim().is_empty());
         if let Some(s) = storage.and_then(|s| s.get(STORAGE_DONE)).and_then(Value::as_str)
             && let Ok(v) = serde_json::from_str::<Value>(s)
         {
@@ -470,6 +489,8 @@ impl Panel {
                 }
             }
         }
+        // `init.host.platform`: how the Settings page spells the host's own keys. Nothing else uses it.
+        self.platform = event.get("host").and_then(|h| h.get("platform")).and_then(Value::as_str).unwrap_or_default().to_string();
         self.reparse();
         // A stored finished-row index past the end of the script (it was shortened before it was
         // saved, or `script` was edited elsewhere) would mark a row that does not exist.
@@ -703,12 +724,28 @@ impl Panel {
                 if edited == self.script {
                     return self.reply(Vec::new());
                 }
+                // A script the panel has not been working on starts at its first line; an edit to the
+                // one it has leaves the letterer where they were. `is_a_new_script` is the difference,
+                // and it is why a chapter pasted over the last one no longer leaves the panel pointing
+                // at line 37 of a script the letterer has never seen.
+                let new_script = script::is_a_new_script(&self.script, &edited);
                 // Rows have probably moved: what was finished may not be finished any more.
                 self.script = edited;
                 self.done.clear();
+                if new_script {
+                    self.cursor = 0;
+                }
                 self.reparse();
+                // The import is done, so the box goes away and the pane is the script itself. Nothing
+                // is lost: the button beside the pane's title brings it back for an edit. A script that
+                // was only corrected keeps the box — the letterer is still working in it — and so does
+                // an emptied one, which is someone about to paste the next chapter in.
+                if new_script && !self.script.trim().is_empty() {
+                    self.script_box = false;
+                }
                 let mut ops = self.save_script();
                 ops.extend(self.save_done());
+                ops.extend(self.save_settings());
                 return self.reply(ops);
             }
             "hideDone" => {
@@ -995,6 +1032,21 @@ impl Panel {
             "openFolders" => {
                 self.page = Page::Folders;
                 self.reply(Vec::new())
+            }
+            // The script box: shown to paste a chapter in or to change a line, put away while the
+            // lettering is done, which is when the pane is the script list and the box is in the way.
+            //
+            // Two ids rather than one toggle, because the host sends the edit a click would overtake
+            // *before* the click itself (`plugin_panel_ui`'s `flush_typing`): on "Done" the field
+            // commits first, and a toggle would then undo the hiding that commit had just done. Each
+            // id names the state it wants, so the click means the same thing however the order falls.
+            "scriptBoxOpen" => {
+                self.script_box = true;
+                self.reply(self.save_settings())
+            }
+            "scriptBoxClose" => {
+                self.script_box = false;
+                self.reply(self.save_settings())
             }
             "state_save" => {
                 let name = self.state_name.trim().to_string();
@@ -1483,6 +1535,7 @@ impl Panel {
             "textSizeIncrement": self.size_increment,
             "styleSizeStep": self.style_step,
             "showQuickStyleSize": self.quick_size,
+            "scriptBoxOpen": self.script_box,
         })
         .to_string();
         vec![json!({"op": "storage.set", "key": STORAGE_SETTINGS, "value": value})]
@@ -1867,6 +1920,70 @@ mod tests {
             h.drive();
             assert_eq!(h.p.cursor == 1, advances, "{button}: {}", h.message());
         }
+    }
+
+    #[test]
+    fn a_chapter_pasted_over_the_last_one_starts_at_its_first_line() {
+        // Working down a script is what the panel is for: a letterer finishes a chapter on its last
+        // line, pastes the next one in, and used to be left on line 37 of a script they had never seen.
+        let mut h = H::fresh();
+        h.doc();
+        h.change("script", json!("d. one\nd. two\nd. three"));
+        h.click("next");
+        h.click("next");
+        assert_eq!(h.p.cursor, 2);
+        h.click("create");
+        h.drive();
+        assert!(!h.p.done.is_empty(), "the line was lettered");
+        h.change("script", json!("d. a fresh chapter\nd. and its second line"));
+        assert_eq!(h.p.cursor, 0, "the new script's first line");
+        assert!(h.p.done.is_empty(), "and nothing in it is finished yet");
+        // A revision of the script the letterer *is* working on is not a new one: the rows are there,
+        // so their place is kept.
+        h.click("next");
+        assert_eq!(h.p.cursor, 1);
+        h.change("script", json!("d. a fresh chapter\nd. and its SECOND line"));
+        assert_eq!(h.p.cursor, 1, "the same script, corrected");
+    }
+
+    #[test]
+    fn the_script_box_is_the_importer_and_closes_once_a_script_is_in() {
+        let mut h = H::fresh();
+        assert!(h.p.script_box, "an empty panel opens on the box: it is what a chapter is pasted into");
+        h.change("script", json!("d. one\nd. two"));
+        assert!(!h.p.script_box, "the import closes it: the pane is the script now");
+        // "Edit script" and "Done" name the state they want rather than flipping whatever is there:
+        // the host commits a text field *before* the click that overtook it, so a toggle would undo
+        // the hiding that same click had just done.
+        h.click("scriptBoxOpen");
+        assert!(h.p.script_box);
+        h.click("scriptBoxClose");
+        assert!(!h.p.script_box);
+        // With the box open, a corrected line is not an import and leaves it open — the letterer is
+        // still in it — and neither is an emptied box, which is someone about to paste one in.
+        h.click("scriptBoxOpen");
+        h.change("script", json!("d. one\nd. TWO"));
+        assert!(h.p.script_box, "an edit is not an import");
+        h.change("script", json!("   "));
+        assert!(h.p.script_box);
+        assert!(h.ops().contains(&"storage.set"), "the state is stored: {:?}", h.ops());
+    }
+
+    #[test]
+    fn a_put_away_script_box_is_remembered_and_an_older_panel_opens_where_it_left_off() {
+        let box_open = |storage: Value| {
+            let mut h = H { p: Panel::new(), out: Vec::new() };
+            h.send(json!({"type": "init", "now": 10, "storage": storage}));
+            h.p.script_box
+        };
+        // The box, as the letterer left it.
+        assert!(!box_open(json!({"settings": json!({"scriptBoxOpen": false}).to_string(), "script": "d. one"})));
+        assert!(box_open(json!({"settings": json!({"scriptBoxOpen": true}).to_string(), "script": "d. one"})));
+        // A panel from before the box could be put away: with a script stored it opens the way it
+        // would have if that script had just been imported, and with none it opens on the box.
+        assert!(!box_open(json!({"script": "d. one\nd. two"})));
+        assert!(box_open(json!({"script": "  "})));
+        assert!(box_open(json!({})));
     }
 
     #[test]

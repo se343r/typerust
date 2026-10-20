@@ -231,6 +231,32 @@ pub fn settle(lines: &[Line], wanted: usize) -> Option<usize> {
     }
 }
 
+/// Whether `after` is a script the panel has not been working on, rather than an edit of `before`.
+///
+/// A letterer pastes the next chapter over the last one and expects to start at its first line; the
+/// same letterer fixing a typo on line 37 expects to still be on line 37. Nothing in a committed text
+/// field says which it was, so the two are told apart by how much of the old script survives: a new
+/// script shares almost nothing with the old one, an edit keeps nearly all of it. Fewer than half of
+/// `before`'s non-empty rows appearing in `after` means a script the panel has not seen.
+///
+/// Comparing rows rather than counting them is what makes a re-import of a *revised* script — the same
+/// chapter with a line fixed — count as the same script, which is what a letterer working through it
+/// wants: they keep their place.
+pub fn is_a_new_script(before: &str, after: &str) -> bool {
+    /// The script's rows, trimmed, as a set: what survives an import is whole rows, not characters.
+    fn rows(text: &str) -> std::collections::BTreeSet<&str> {
+        split(text).map(str::trim).filter(|r| !r.is_empty()).collect()
+    }
+    let old = rows(before);
+    // Nothing to continue from: the first script of a session is always new.
+    if old.is_empty() {
+        return true;
+    }
+    let new = rows(after);
+    let kept = old.iter().filter(|r| new.contains(*r)).count();
+    kept * 2 < old.len()
+}
+
 // ---------------------------------------------------------------- markdown
 
 /// One stretch of a line with one weight.
@@ -613,6 +639,28 @@ mod tests {
         let with_blank = parsed("d: One\n\nd: Two");
         assert_eq!(settle(&with_blank, 1), Some(1), "an ignored row is kept where it is");
         assert_eq!(settle(&parsed("\n\nd: Two"), 0), Some(0), "even at the top of the script");
+    }
+
+    #[test]
+    fn a_script_shares_few_rows_with_the_one_it_replaces_and_most_with_an_edit_of_itself() {
+        let chapter = "d: One\nd: Two\nd: Three\nd: Four";
+        // The first script of a session is always new — there is nothing to have been working on.
+        assert!(is_a_new_script("", chapter));
+        assert!(is_a_new_script("   \n\n", chapter));
+        // The next chapter, pasted over this one.
+        assert!(is_a_new_script(chapter, "d: Five\nd: Six"));
+        // A typo fixed, a line added, a line's wording changed: the same script.
+        assert!(!is_a_new_script(chapter, "d: One\nd: Two\nd: Three\nd: Four\n"));
+        assert!(!is_a_new_script(chapter, "d: One\nd: TWO\nd: Three\nd: Four"));
+        assert!(!is_a_new_script(chapter, "d: One\nd: Three\nd: Four"));
+        // Half or more of the rows surviving is still the letterer's own script; fewer is not. The
+        // comparison is of whole trimmed rows, so re-indenting one is not a rewrite of it.
+        assert!(!is_a_new_script(chapter, "d: One\nd: Two\nd: Fresh"));
+        assert!(is_a_new_script(chapter, "d: One\nd: Fresh\nd: Newer"));
+        assert!(!is_a_new_script(chapter, "  d: One\n  d: Two\n  d: Three\n  d: Four"));
+        // And it never panics on whatever a field hands it.
+        assert!(is_a_new_script(chapter, "\u{0}\n\u{feff}"));
+        assert!(!is_a_new_script("\u{0}", "\u{0}"), "a row that differs from nothing is not a different script");
     }
 
     // --- markdown ------------------------------------------------------------------------------
