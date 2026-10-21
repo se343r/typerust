@@ -124,6 +124,10 @@ pub struct Run {
     pub padding: f64,
     /// Keep each layer's own size when a style is applied (TyperTools' Ctrl+click).
     pub keep_size: bool,
+    /// Ask the host to drop the pixel selection in the call that places the line
+    /// (`type.create`/`type.edit`'s `deselect`). Off, the marquee is left as it was — which is what
+    /// the port did before the host could clear it, and what the setting is for.
+    pub deselect: bool,
     /// Make point text rather than paragraph text (TyperTools' "paste as point text" setting). Only
     /// Create reads it: every other kind works on a layer that already exists and is measured.
     pub point: bool,
@@ -172,6 +176,7 @@ impl Run {
             resize: false,
             padding: 0.0,
             keep_size: false,
+            deselect: false,
             point: false,
             todo,
             layer,
@@ -316,6 +321,10 @@ impl Run {
                 // The whole action is one undo step, and this — the layer it makes — is the step the
                 // letterer would most expect to be one on its own.
                 o.insert("coalesce".into(), json!(self.coalesce));
+                // The line lands in this call, so this is the one that drops the marquee with it.
+                if self.deselect {
+                    o.insert("deselect".into(), json!(true));
+                }
                 let Some(sel) = self.sel else {
                     return Step::Failed("there is no selection to letter into".into());
                 };
@@ -344,6 +353,11 @@ impl Run {
                         params["box"] = json!(b.as_box());
                         self.box_set = Some(b);
                     }
+                    // Insert makes no layer: the line goes into the layers the letterer picked, and
+                    // this is the call that writes it, so this is the one that drops the marquee.
+                    if self.deselect {
+                        params["deselect"] = json!(true);
+                    }
                     self.call("type.edit", params)
                 }
                 Kind::Apply => {
@@ -360,7 +374,14 @@ impl Run {
                     };
                     let rect = sel.box_for(self.padding);
                     self.box_set = Some(rect);
-                    self.call("type.edit", json!({"layer": self.layer, "box": rect.as_box(), "coalesce": self.coalesce}))
+                    let mut params = json!({"layer": self.layer, "box": rect.as_box(), "coalesce": self.coalesce});
+                    // Align is where TyperTools and TypeR deselected outright (`host.js` calls
+                    // `_deselect` in the step that positions the layer inside the selection), and it
+                    // is the last time the marquee is read, so the same call drops it.
+                    if self.deselect {
+                        params["deselect"] = json!(true);
+                    }
+                    self.call("type.edit", params)
                 }
                 // The layer's own box, grown by the size step's factors.
                 _ => {
@@ -673,6 +694,81 @@ mod tests {
             Step::Done(what) => assert!(what.starts_with("Set “You said that yesterday.” into 1 layer."), "{what}"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The marquee said where the line goes, so the call that places it asks the host to drop it —
+    /// inside the same undo step, which is what makes the clearing part of placing the line rather
+    /// than a "Deselect" step of its own. Every kind that reads the marquee carries it: Create makes
+    /// the layer, Insert and Align write through `type.edit` because they make no layer at all.
+    #[test]
+    fn the_call_that_places_the_line_asks_for_the_marquee_to_be_dropped() {
+        // Create: `type.create`, the call that makes the layer.
+        let mut r = create_run();
+        r.deselect = true;
+        assert_eq!(r.step(DPI, None), Step::Doc);
+        let (command, params) = call(r.step(DPI, Some(&doc_answer())));
+        assert_eq!((command, params["deselect"].clone()), ("type.create", json!(true)));
+        // The fit that follows does not ask again: the marquee is dropped once, by the call that
+        // places the line.
+        assert!(matches!(r.step(DPI, Some(&json!({"ok": true, "layer": 9}))), Step::Call { command: "type.info", .. }));
+        let measured = info("I'll be home by six.", [110.0, 60.0, 272.0, 90.0], 14.0, Some([110.0, 60.0, 162.0, 2100.0]));
+        let (command, params) = call(r.step(DPI, Some(&measured)));
+        assert_eq!(command, "type.edit");
+        assert!(params.get("deselect").is_none(), "dropped once: {params}");
+
+        // Insert: the line goes into the layer the letterer picked, so it is the `type.edit` that
+        // writes the text.
+        let mut r = Run::begin(Kind::Insert, "tt2b".into(), vec![4]);
+        r.text = "You said that yesterday.".into();
+        r.deselect = true;
+        assert!(matches!(r.step(DPI, None), Step::Call { command: "type.info", .. }));
+        let before = info("old", [300.0, 400.0, 500.0, 430.0], 14.0, Some([300.0, 400.0, 200.0, 30.0]));
+        let (command, params) = call(r.step(DPI, Some(&before)));
+        assert_eq!((command, params["deselect"].clone()), ("type.edit", json!(true)));
+        assert_eq!(params["text"], json!("You said that yesterday."), "the call that writes the line is the one that drops the marquee");
+
+        // Align: the step that gives the layer the balloon's box, which is where TypeR deselected.
+        let mut r = Run::begin(Kind::Align, "tt3c".into(), vec![4]);
+        r.resize = true;
+        r.deselect = true;
+        assert_eq!(r.step(DPI, None), Step::Doc);
+        assert!(matches!(r.step(DPI, Some(&doc_answer())), Step::Call { command: "type.info", .. }));
+        let before = info("hi", [0.0, 0.0, 40.0, 20.0], 14.0, Some([0.0, 0.0, 100.0, 20.0]));
+        let (command, params) = call(r.step(DPI, Some(&before)));
+        assert_eq!((command, params["deselect"].clone()), ("type.edit", json!(true)));
+        // …and the centring move that follows does not.
+        let wrapped = info("hi", [110.0, 60.0, 272.0, 90.0], 14.0, Some([110.0, 60.0, 162.0, 2100.0]));
+        let (command, params) = call(r.step(DPI, Some(&wrapped)));
+        assert_eq!(command, "type.edit");
+        assert!(params.get("deselect").is_none(), "dropped once: {params}");
+    }
+
+    /// With the setting off, no call carries the flag at all — the marquee is the letterer's, and
+    /// every run leaves it exactly as it was.
+    #[test]
+    fn no_call_asks_for_the_marquee_to_be_dropped_when_the_setting_is_off() {
+        let mut r = create_run();
+        assert!(!r.deselect, "off unless the panel turns it on");
+        assert_eq!(r.step(DPI, None), Step::Doc);
+        let (command, params) = call(r.step(DPI, Some(&doc_answer())));
+        assert_eq!(command, "type.create");
+        assert!(params.get("deselect").is_none(), "{params}");
+
+        let mut r = Run::begin(Kind::Insert, "tt2c".into(), vec![4]);
+        r.text = "hi".into();
+        assert!(matches!(r.step(DPI, None), Step::Call { command: "type.info", .. }));
+        let before = info("old", [300.0, 400.0, 500.0, 430.0], 14.0, Some([300.0, 400.0, 200.0, 30.0]));
+        let (command, params) = call(r.step(DPI, Some(&before)));
+        assert_eq!(command, "type.edit");
+        assert!(params.get("deselect").is_none(), "{params}");
+
+        let mut r = Run::begin(Kind::Align, "tt3d".into(), vec![4]);
+        r.resize = true;
+        assert_eq!(r.step(DPI, None), Step::Doc);
+        assert!(matches!(r.step(DPI, Some(&doc_answer())), Step::Call { command: "type.info", .. }));
+        let (command, params) = call(r.step(DPI, Some(&before)));
+        assert_eq!(command, "type.edit");
+        assert!(params.get("deselect").is_none(), "{params}");
     }
 
     #[test]

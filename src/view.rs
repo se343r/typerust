@@ -1065,6 +1065,8 @@ fn settings(p: &Panel) -> Vec<Value> {
         muted("TypeR's `internalPadding`: taken off both sides of the balloon box's width so the type does not touch its edge (0–100)."),
         toggle("set_resizeOnCenter", p.resize_on_center, "Resize the text box when Align centres"),
         muted("Off, Align only moves the layer. On, it first gives the layer the balloon's box and refits it, as TypeR's `resizeTextBoxOnCenter` does; point text is never reshaped."),
+        toggle("set_deselect", p.deselect, "Deselect after placing a line"),
+        muted("Create, Insert and Align drop the marquee once the line is in, so the next balloon can be drawn without clearing it by hand. The clearing goes in the same undo step as the line: one undo brings the line and the marquee back together."),
         separator(),
         row(vec![muted("Size step"), number("set_sizeIncrement", p.size_increment, 1.0, 99.0, 1.0, false), muted("for A−/A+")]),
         row(vec![muted("Style size step"), number("set_styleStep", p.style_step, 0.01, 1000.0, 0.01, false)]),
@@ -1629,6 +1631,7 @@ mod tests {
                     | "set_sizeIncrement"
                     | "set_styleStep"
                     | "set_quickStyleSize"
+                    | "set_deselect"
                     | "state_name"
                     | "state_save"
                     | "back"

@@ -187,6 +187,12 @@ pub struct Panel {
     pub style_step: f64,
     /// TypeR's `showQuickStyleSize`: whether the library rows carry a size editor.
     pub quick_size: bool,
+    /// Whether an action drops the marquee once the line is placed. On by default: the marquee was
+    /// how the letterer said where the line goes, and the ants left over the balloon are in the way
+    /// of the next one. TyperTools and TypeR cleared the selection themselves (and on Align they
+    /// deselected outright, `app_src/host.js`'s `_deselect` in the positioning step); the port asks
+    /// the host to do it in the same undo step instead, with `type.create`/`type.edit`'s `deselect`.
+    pub deselect: bool,
     /// Named snapshots, by name. TypeR keeps these in its own storage under `states`.
     pub states: BTreeMap<String, SavedState>,
     /// The name being typed in the states field.
@@ -261,6 +267,7 @@ impl Panel {
             size_increment: 1.0,
             style_step: 0.1,
             quick_size: true,
+            deselect: true,
             states: BTreeMap::new(),
             state_name: String::new(),
             page: Page::Lettering,
@@ -450,6 +457,7 @@ impl Panel {
             self.size_increment = integer(number(&v, "textSizeIncrement", 1.0), 1.0, 99.0, 1.0);
             self.style_step = positive(number(&v, "styleSizeStep", 0.1), 0.1);
             self.quick_size = v.get("showQuickStyleSize").and_then(Value::as_bool).unwrap_or(true);
+            self.deselect = v.get("deselectAfterPlacing").and_then(Value::as_bool).unwrap_or(true);
             // Read here and applied below, once the stored script is known: a panel that stored a
             // script but no setting is a panel from before the box could be put away, and it opens the
             // way it would have if that script had just been imported.
@@ -818,6 +826,10 @@ impl Panel {
             }
             "set_quickStyleSize" => {
                 self.quick_size = value.as_bool().unwrap_or(true);
+                return self.reply(self.save_settings());
+            }
+            "set_deselect" => {
+                self.deselect = value.as_bool().unwrap_or(true);
                 return self.reply(self.save_settings());
             }
             "state_name" => {
@@ -1285,6 +1297,9 @@ impl Panel {
             o.insert("direction".into(), json!(self.direction));
         }
         run.antialias = props::anti_alias_param(props::anti_alias(&style.text_props)).to_string();
+        // The marquee has said where the line goes; whether the ants stay afterwards is the
+        // letterer's setting. On Apply and Resize there is nothing to drop it for.
+        run.deselect = self.deselect && matches!(kind, Kind::Create | Kind::Insert | Kind::Align);
         // Applying a style applies its size too — TyperTools' own arrow does, and Ctrl+click on it is
         // the exception, which is the second button here.
         run.keep_size = keep_size;
@@ -1535,6 +1550,7 @@ impl Panel {
             "textSizeIncrement": self.size_increment,
             "styleSizeStep": self.style_step,
             "showQuickStyleSize": self.quick_size,
+            "deselectAfterPlacing": self.deselect,
             "scriptBoxOpen": self.script_box,
         })
         .to_string();
@@ -2594,6 +2610,7 @@ mod tests {
                 "scale": 120, "page": "settings", "markdown": true, "direction": "rtl",
                 "internalPadding": 25, "resizeTextBoxOnCenter": true,
                 "textSizeIncrement": 5, "styleSizeStep": 0.5, "showQuickStyleSize": false,
+                "deselectAfterPlacing": false,
             }).to_string(),
         }}));
         assert_eq!(h.p.scale, 120.0);
@@ -2605,6 +2622,11 @@ mod tests {
         assert_eq!(h.p.size_increment, 5.0);
         assert_eq!(h.p.style_step, 0.5);
         assert!(!h.p.quick_size);
+        assert!(!h.p.deselect, "the marquee is left alone when the letterer said so");
+        // A panel from before the setting existed drops the marquee, which is the default.
+        let mut h = H { p: Panel::new(), out: Vec::new() };
+        h.send(json!({"type": "init", "now": 10, "storage": {"settings": json!({"scale": 120}).to_string()}}));
+        assert!(h.p.deselect);
     }
 
     #[test]

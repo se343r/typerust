@@ -67,6 +67,11 @@ giving a key to and the menu where any of them is changed. The panel itself can 
 has no command or shortcut contribution and no keystroke crosses the sandbox — so its own presses are
 its buttons, and the guide says so rather than promising a key that cannot fire.
 
+**Deselect after placing a line** is on by default. Create, Insert and Align pass the host's
+`"deselect": true` on the one call that puts the line in, so the marching ants and the line go in the
+same undo step — the marquee was how the letterer said where the line goes and is in the way of the
+next balloon. Off, the selection is left exactly as it was.
+
 Everything the panel changes in the document goes through five engine commands — `type.create`,
 `type.edit`, `type.setStyle`, `type.info`, `type.fonts` — which are exactly the five the host's
 allow-list grants a panel that asks for `read` and `addLayers` (PhotoCraft's
